@@ -1,0 +1,100 @@
+var system = require('system');
+
+var edition = system.args[1] || 'windows10';
+var language = system.args[2] || 'english';
+var architecture = system.args[3] || '64';
+
+var page = require('webpage').create();
+
+/* Global helper functions */
+
+function debug(/*msg...*/) {
+  if (system.env.DEBUG) {
+    console.log.apply(console, arguments);
+  }
+}
+
+function assert(condition, message) {
+  if (!condition) {
+    console.error('Assertion failed:',message);
+    page.render('error.png');
+    phantom.exit(1);
+  }
+}
+
+function waitFor(conditionFn, cb) {
+  var countDown = 4 * 10;
+  var interval = setInterval(function() {
+    assert(countDown > 0, 'Timeout while waiting for DOM elements on page');
+    countDown--;
+    if (conditionFn()) {
+      clearInterval(interval);
+      cb();
+    }
+  }, 250);
+};
+
+/* Page specific helper functions */
+
+page.waitForElement = function(selector, cb) {
+  var page = this;
+  debug('Waiting for', selector);
+  waitFor(function() {
+    return page.hasElement(selector);
+  }, cb);
+};
+
+page.click = function(selector) {
+  debug('Click', selector);
+  this.evaluate(function(selector) {
+    $(selector).click();
+  }, selector);
+};
+
+page.hasElement = function(selector) {
+  return this.evaluate(function(selector) {
+    return !!$(selector)[0];
+  }, selector);
+};
+
+page.selectItem = function(selectElementSelector, optionText) {
+  optionText = optionText.toLowerCase();
+  var optionTexts = this.evaluate(function(selectElementSelector) {
+    return $(selectElementSelector).find('option').map(function() { return $(this).text().toLowerCase().replace(/\W/g, ''); }).toArray();
+  }, selectElementSelector);
+  var optionIndex = optionTexts.indexOf(optionText);
+  assert(optionIndex >= 0, '<select> element '+selectElementSelector+' does not contain <option> with text \'' + optionText + '\'. Possible options are:' + optionTexts.join('\n'));
+  debug('Selecting <option> with text',optionText,'and index',optionIndex,'on <select> element',selectElementSelector);
+  this.evaluate(function(selectElementSelector, optionIndex) {
+    $(selectElementSelector)[0].selectedIndex = optionIndex;
+  }, selectElementSelector, optionIndex);
+};
+
+page.selectEdition = function(productEdition) {
+  this.selectItem('#product-edition', productEdition);
+  this.click("#submit-product-edition");
+};
+
+page.selectLanguage = function(language) {
+  var value = this.selectItem('#product-languages', language);
+  this.click('#submit-sku');
+};
+
+page.open('https://www.microsoft.com/en-us/software-download/windows10ISO', function(status) {
+  page.waitForElement('#submit-product-edition', function() {
+    page.selectEdition(edition);
+    page.waitForElement('#submit-sku', function() {
+      page.selectLanguage(language);
+
+      page.waitForElement('.product-download-type', function() {
+        // The download buttons do not have an unique ID. The `32-bit` and `64-bit` texts that are in the buttons have a className `product-download-type`.
+        // Search for that className and the parent should be the button we're after.
+        var downloadUrl = page.evaluate(function(architecture) {
+          return $('.product-download-type:contains('+architecture+')').parent().attr('href');
+        }, architecture);
+        console.log(downloadUrl);
+        phantom.exit(0);
+      });
+    });
+  });
+});
